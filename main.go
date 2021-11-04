@@ -171,12 +171,9 @@ type LogWriter struct {
 	tx chan<- []byte
 }
 
-// `data` contains a trailing `\n`.
 func (w *LogWriter) sendToBackend(data []byte) {
-	// Strip off the trailing `\n`
-	// XXX: Should we double check the `\n` byte?
 	select {
-	case w.tx <- data[:len(data)-1]:
+	case w.tx <- data:
 	default:
 		os.Stderr.Write(data)
 	}
