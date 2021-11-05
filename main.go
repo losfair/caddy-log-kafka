@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -105,33 +106,30 @@ func (k *KafkaLogger) OpenWriter() (io.WriteCloser, error) {
 }
 
 func (k *KafkaLogger) runWorker(worker <-chan []byte) {
-	dial := func() (*kafka.Conn, error) {
-		ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-		return kafka.DialLeader(ctx, "tcp", k.Leader, k.Topic, int(k.Partition))
+	dial := func() *kafka.Conn {
+		backoffStrategy := backoff.NewExponentialBackOff()
+		backoffStrategy.MaxElapsedTime = 0
+		var conn *kafka.Conn
+		err := backoff.Retry(func() error {
+			var err error
+			ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err = kafka.DialLeader(ctx, "tcp", k.Leader, k.Topic, int(k.Partition))
+			if err != nil {
+				k.logger.Error("kafka dial error", zap.Error(err))
+			}
+			return err
+		}, backoffStrategy)
+		if err != nil {
+			panic("backoff retry still returns error")
+		}
+		k.logger.Info("kafka connection established")
+		return conn
 	}
 
-	var conn *kafka.Conn
-	defer func() {
-		if conn != nil {
-			conn.Close()
-		}
-	}()
+	conn := dial()
+	defer conn.Close()
 
 	for {
-		if conn == nil {
-			backoffStrategy := backoff.NewExponentialBackOff()
-			backoffStrategy.MaxElapsedTime = 0
-			err := backoff.Retry(func() error {
-				var err error
-				conn, err = dial()
-				return err
-			}, backoffStrategy)
-			if err != nil {
-				panic("backoff retry still returns error")
-			}
-			k.logger.Info("kafka connection established")
-		}
-
 		d := <-worker
 		if d == nil {
 			break
@@ -155,10 +153,25 @@ func (k *KafkaLogger) runWorker(worker <-chan []byte) {
 				break outer
 			}
 		}
-		if _, err := conn.WriteMessages(messages...); err != nil {
-			conn.Close()
-			conn = nil
-			k.logger.Error("kafka write failed", zap.Error(err))
+
+		// Bounded retry loop on spurious connection failures.
+		deliverySucceeded := false
+		for i := 0; i < 3; i++ {
+			if _, err := conn.WriteMessages(messages...); err != nil {
+				spurious := err == io.EOF || err == syscall.EPIPE
+				k.logger.Error("kafka write failed", zap.Error(err), zap.Bool("spurious", spurious), zap.Int("attempt", i+1))
+				conn.Close()
+				conn = dial()
+				if !spurious {
+					break
+				}
+			} else {
+				deliverySucceeded = true
+				break
+			}
+		}
+
+		if !deliverySucceeded {
 			for _, msg := range messages {
 				os.Stderr.WriteString(fmt.Sprintf("kafka log delivery failed: %s\n", string(msg.Value)))
 			}
@@ -175,7 +188,7 @@ func (w *LogWriter) sendToBackend(data []byte) {
 	select {
 	case w.tx <- data:
 	default:
-		os.Stderr.Write(data)
+		os.Stderr.WriteString(fmt.Sprintf("kafka log delivery queue full: %s\n", string(data)))
 	}
 }
 
