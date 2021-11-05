@@ -25,7 +25,7 @@ func init() {
 // Reference: https://github.com/caddyserver/caddy/blob/e3c369d4526e44f23efb10aaad8a60ce519720a0/modules/logging/netwriter.go
 type KafkaLogger struct {
 	logger    *zap.Logger
-	Leader    string `json:"leader"`
+	Address   string `json:"address"`
 	Topic     string `json:"topic"`
 	Partition int64  `json:"partition"`
 }
@@ -58,8 +58,8 @@ func (k *KafkaLogger) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for nesting := d.Nesting(); d.NextBlock(nesting); {
 			switch d.Val() {
-			case "leader":
-				if !d.Args(&k.Leader) {
+			case "address":
+				if !d.Args(&k.Address) {
 					return d.ArgErr()
 				}
 			case "topic":
@@ -89,7 +89,7 @@ func (k *KafkaLogger) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 }
 
 func (k *KafkaLogger) WriterKey() string {
-	return fmt.Sprintf("kafka:%s,%s,%d", string2json(k.Leader), string2json(k.Topic), k.Partition)
+	return fmt.Sprintf("kafka:%s,%s,%d", string2json(k.Address), string2json(k.Topic), k.Partition)
 }
 
 func (k *KafkaLogger) String() string {
@@ -114,7 +114,7 @@ func (k *KafkaLogger) runWorker(worker <-chan []byte) {
 		err := backoff.Retry(func() error {
 			var err error
 			ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-			conn, err = kafka.DialLeader(ctx, "tcp", k.Leader, k.Topic, int(k.Partition))
+			conn, err = kafka.DialLeader(ctx, "tcp", k.Address, k.Topic, int(k.Partition))
 			if err != nil {
 				k.logger.Error("kafka dial error", zap.Error(err))
 			}
