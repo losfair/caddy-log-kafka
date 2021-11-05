@@ -2,6 +2,7 @@ package log_kafka
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -158,7 +159,7 @@ func (k *KafkaLogger) runWorker(worker <-chan []byte) {
 		deliverySucceeded := false
 		for i := 0; i < 3; i++ {
 			if _, err := conn.WriteMessages(messages...); err != nil {
-				spurious := err == io.EOF || err == syscall.EPIPE
+				spurious := errors.Is(err, io.EOF) || errors.Is(err, syscall.EPIPE)
 				k.logger.Error("kafka write failed", zap.Error(err), zap.Bool("spurious", spurious), zap.Int("attempt", i+1))
 				conn.Close()
 				conn = dial()
