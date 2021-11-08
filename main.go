@@ -116,7 +116,13 @@ func (k *KafkaLogger) runWorker(worker <-chan []byte) {
 			ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 			conn, err = kafka.DialLeader(ctx, "tcp", k.Address, k.Topic, int(k.Partition))
 			if err != nil {
-				k.logger.Error("kafka dial error", zap.Error(err))
+				k.logger.Error(
+					"kafka dial error",
+					zap.String("address", k.Address),
+					zap.String("topic", k.Topic),
+					zap.Int64("partition", k.Partition),
+					zap.Error(err),
+				)
 			}
 			return err
 		}, backoffStrategy)
